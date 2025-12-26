@@ -1,5 +1,5 @@
-// src/App.js
-import React from 'react';
+// src/App.jsx
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Auth/Login';
 import Layout from './components/Layout/Layout';
