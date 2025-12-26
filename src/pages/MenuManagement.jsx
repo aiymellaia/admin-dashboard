@@ -1,38 +1,107 @@
 import React, { useState, useEffect } from 'react';
 import MenuItemList from '../components/MenuItems/MenuItemList';
+import MenuItemForm from '../components/MenuItems/MenuItemForm';
 import { menuService } from '../services/menuService';
 
 const MenuManagement = () => {
   const [items, setItems] = useState([]);
   const [editingItem, setEditingItem] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [stats, setStats] = useState(null);
 
   useEffect(() => {
     loadItems();
+    loadStats();
   }, []);
 
-  const loadItems = () => {
-    const allItems = menuService.getAll();
-    setItems(allItems);
-  };
-
-  const handleCreate = (itemData) => {
-    menuService.create(itemData);
-    loadItems();
-    setShowForm(false);
-  };
-
-  const handleUpdate = (id, updates) => {
-    menuService.update(id, updates);
-    loadItems();
-    setEditingItem(null);
-  };
-
-  const handleDelete = (id) => {
-    if (window.confirm('Are you sure you want to delete this item?')) {
-      menuService.delete(id);
-      loadItems();
+  const loadItems = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await menuService.getAll();
+      setItems(data);
+    } catch (error) {
+      console.error('Error loading menu items:', error);
+      setError('Failed to load menu items. Please try again.');
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const loadStats = async () => {
+    try {
+      const data = await menuService.getStats();
+      setStats(data);
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    }
+  };
+
+  const handleCreate = async (itemData) => {
+    try {
+      const result = await menuService.create(itemData);
+
+      if (result) {
+        await loadItems();
+        await loadStats();
+        setShowForm(false);
+        return { success: true, message: 'Item created successfully!' };
+      }
+
+      return { success: false, error: 'Failed to create item' };
+    } catch (error) {
+      console.error('Error creating item:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to create item. Please try again.'
+      };
+    }
+  };
+
+  const handleUpdate = async (id, updates) => {
+    try {
+      const result = await menuService.update(id, updates);
+
+      if (result) {
+        await loadItems();
+        await loadStats();
+        setEditingItem(null);
+        return { success: true, message: 'Item updated successfully!' };
+      }
+
+      return { success: false, error: 'Failed to update item' };
+    } catch (error) {
+      console.error('Error updating item:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to update item. Please try again.'
+      };
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (window.confirm('Are you sure you want to delete this item?')) {
+      try {
+        const result = await menuService.delete(id);
+
+        if (result) {
+          await loadItems();
+          await loadStats();
+          return { success: true, message: 'Item deleted successfully!' };
+        }
+
+        return { success: false, error: 'Failed to delete item' };
+      } catch (error) {
+        console.error('Error deleting item:', error);
+        return {
+          success: false,
+          error: error.message || 'Failed to delete item. Please try again.'
+        };
+      }
+    }
+    return { success: false, error: 'Deletion cancelled' };
   };
 
   const handleEdit = (item) => {
@@ -48,25 +117,123 @@ const MenuManagement = () => {
     { value: 'specials', label: 'Seasonal Specials' }
   ];
 
+  const syncWithServer = async () => {
+    try {
+      setLoading(true);
+      const result = await menuService.syncWithServer();
+
+      if (result.success) {
+        await loadItems();
+        return { success: true, message: result.message };
+      } else {
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error('Sync error:', error);
+      return { success: false, error: 'Sync failed' };
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1 style={{ color: '#2A211C', fontSize: '1.875rem' }}>Menu Items Management</h1>
-        <button
-          onClick={() => setShowForm(true)}
-          style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#6F4E37',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: '600',
-            cursor: 'pointer'
-          }}
-        >
-          Add New Item
-        </button>
+    <div style={{ padding: '20px' }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '2rem',
+        flexWrap: 'wrap',
+        gap: '1rem'
+      }}>
+        <div>
+          <h1 style={{ color: '#2A211C', fontSize: '1.875rem', marginBottom: '0.5rem' }}>
+            Menu Management
+          </h1>
+          {stats && (
+            <div style={{
+              display: 'flex',
+              gap: '1rem',
+              color: '#666',
+              fontSize: '0.9rem'
+            }}>
+              <span>Total: {stats.totalItems || items.length} items</span>
+              <span>•</span>
+              <span>{stats.categories || categories.length} categories</span>
+              <span>•</span>
+              <span>{stats.availableProducts || items.filter(i => i.is_available !== false).length} available</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <button
+            onClick={() => syncWithServer()}
+            disabled={loading}
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#4A5568',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            <span>🔄</span>
+            Sync
+          </button>
+
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#6F4E37',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            <span>+</span>
+            Add New Item
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div style={{
+          padding: '1rem',
+          backgroundColor: '#FEE2E2',
+          color: '#DC2626',
+          borderRadius: '8px',
+          marginBottom: '1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#DC2626',
+              cursor: 'pointer',
+              fontSize: '1.2rem'
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {showForm && (
         <div style={{
@@ -89,11 +256,34 @@ const MenuManagement = () => {
             width: '100%',
             maxWidth: '600px',
             maxHeight: '90vh',
-            overflowY: 'auto'
+            overflowY: 'auto',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)'
           }}>
-            <h2 style={{ marginBottom: '1.5rem', color: '#2A211C' }}>
-              {editingItem ? 'Edit Menu Item' : 'Add New Menu Item'}
-            </h2>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '1.5rem'
+            }}>
+              <h2 style={{ color: '#2A211C', margin: 0 }}>
+                {editingItem ? 'Edit Menu Item' : 'Add New Menu Item'}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowForm(false);
+                  setEditingItem(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#666'
+                }}
+              >
+                ×
+              </button>
+            </div>
 
             <MenuItemForm
               categories={categories}
@@ -111,222 +301,54 @@ const MenuManagement = () => {
         </div>
       )}
 
-      <MenuItemList
-        items={items}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-      />
-    </div>
-  );
-};
-
-const MenuItemForm = ({ categories, initialData, onSubmit, onCancel }) => {
-  const [formData, setFormData] = useState({
-    name: '',
-    category: 'hot-coffee',
-    price: '',
-    description: '',
-    popular: false,
-    stock: '',
-    image: ''
-  });
-
-  React.useEffect(() => {
-    if (initialData) {
-      setFormData({
-        name: initialData.name || '',
-        category: initialData.category || 'hot-coffee',
-        price: initialData.price || '',
-        description: initialData.description || '',
-        popular: initialData.popular || false,
-        stock: initialData.stock || '',
-        image: initialData.image || ''
-      });
-    }
-  }, [initialData]);
-
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSubmit({
-      ...formData,
-      price: parseFloat(formData.price),
-      stock: parseInt(formData.stock) || 0
-    });
-  };
-
-  return (
-    <form onSubmit={handleSubmit}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-        <div>
-          <label htmlFor="name" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Item Name *</label>
-          <input
-            type="text"
-            id="name"
-            name="name"
-            value={formData.name}
-            onChange={handleChange}
-            required
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #E5E7EB',
-              borderRadius: '8px',
-              fontSize: '1rem'
-            }}
-          />
+      {loading ? (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '200px',
+          color: '#666'
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>☕</div>
+            <p>Loading menu items...</p>
+          </div>
         </div>
-
-        <div>
-          <label htmlFor="category" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Category *</label>
-          <select
-            id="category"
-            name="category"
-            value={formData.category}
-            onChange={handleChange}
-            required
+      ) : items.length === 0 ? (
+        <div style={{
+          textAlign: 'center',
+          padding: '3rem',
+          backgroundColor: '#F8F5F0',
+          borderRadius: '12px',
+          color: '#666'
+        }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📋</div>
+          <h3 style={{ color: '#2A211C', marginBottom: '0.5rem' }}>No menu items found</h3>
+          <p style={{ marginBottom: '1.5rem' }}>Add your first menu item to get started</p>
+          <button
+            onClick={() => setShowForm(true)}
             style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #E5E7EB',
+              padding: '0.75rem 1.5rem',
+              backgroundColor: '#6F4E37',
+              color: 'white',
+              border: 'none',
               borderRadius: '8px',
-              fontSize: '1rem',
-              backgroundColor: 'white'
+              fontWeight: '600',
+              cursor: 'pointer'
             }}
           >
-            {categories.map(cat => (
-              <option key={cat.value} value={cat.value}>
-                {cat.label}
-              </option>
-            ))}
-          </select>
+            + Add First Item
+          </button>
         </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-        <div>
-          <label htmlFor="price" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Price ($) *</label>
-          <input
-            type="number"
-            id="price"
-            name="price"
-            value={formData.price}
-            onChange={handleChange}
-            step="0.01"
-            min="0"
-            required
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #E5E7EB',
-              borderRadius: '8px',
-              fontSize: '1rem'
-            }}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="stock" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Stock Quantity</label>
-          <input
-            type="number"
-            id="stock"
-            name="stock"
-            value={formData.stock}
-            onChange={handleChange}
-            min="0"
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #E5E7EB',
-              borderRadius: '8px',
-              fontSize: '1rem'
-            }}
-          />
-        </div>
-      </div>
-
-      <div style={{ marginBottom: '1rem' }}>
-        <label htmlFor="description" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Description *</label>
-        <textarea
-          id="description"
-          name="description"
-          value={formData.description}
-          onChange={handleChange}
-          rows="3"
-          required
-          style={{
-            width: '100%',
-            padding: '0.75rem',
-            border: '1px solid #E5E7EB',
-            borderRadius: '8px',
-            fontSize: '1rem',
-            fontFamily: 'inherit'
-          }}
+      ) : (
+        <MenuItemList
+          items={items}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          loading={loading}
         />
-      </div>
-
-      <div style={{ marginBottom: '1rem' }}>
-        <label htmlFor="image" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Image URL</label>
-        <input
-          type="url"
-          id="image"
-          name="image"
-          value={formData.image}
-          onChange={handleChange}
-          placeholder="https://example.com/image.jpg"
-          style={{
-            width: '100%',
-            padding: '0.75rem',
-            border: '1px solid #E5E7EB',
-            borderRadius: '8px',
-            fontSize: '1rem'
-          }}
-        />
-      </div>
-
-      <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <input
-          type="checkbox"
-          id="popular"
-          name="popular"
-          checked={formData.popular}
-          onChange={handleChange}
-        />
-        <label htmlFor="popular" style={{ fontWeight: '500' }}>Mark as Popular Item</label>
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '2rem' }}>
-        <button type="button" onClick={onCancel} style={{
-          padding: '0.5rem 1rem',
-          backgroundColor: '#F8F5F0',
-          color: '#333333',
-          border: '1px solid #E5E7EB',
-          borderRadius: '8px',
-          fontWeight: '600',
-          cursor: 'pointer'
-        }}>
-          Cancel
-        </button>
-        <button type="submit" style={{
-          padding: '0.5rem 1rem',
-          backgroundColor: '#6F4E37',
-          color: 'white',
-          border: 'none',
-          borderRadius: '8px',
-          fontWeight: '600',
-          cursor: 'pointer'
-        }}>
-          {initialData ? 'Update Item' : 'Add Item'}
-        </button>
-      </div>
-    </form>
+      )}
+    </div>
   );
 };
 

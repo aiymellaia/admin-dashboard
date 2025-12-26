@@ -1,4 +1,3 @@
-// src/App.js
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Auth/Login';
@@ -8,10 +7,34 @@ import MenuManagement from './pages/MenuManagement';
 import UserManagement from './pages/UserManagement';
 import Settings from './pages/Settings';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import './styles/main.css';
 
 function PrivateRoute({ children }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+
+  // Показываем загрузку при проверке аутентификации
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        backgroundColor: '#F8F5F0'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            fontSize: '3rem',
+            marginBottom: '1rem',
+            animation: 'pulse 1.5s infinite'
+          }}>
+            ☕
+          </div>
+          <p style={{ color: '#666' }}>Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
   return isAuthenticated ? children : <Navigate to="/login" />;
 }
 
@@ -32,6 +55,36 @@ function App() {
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/" element={<Navigate to="/admin" />} />
+
+          {/* Catch-all 404 route */}
+          <Route path="*" element={
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100vh',
+              backgroundColor: '#F8F5F0',
+              flexDirection: 'column',
+              textAlign: 'center',
+              padding: '2rem'
+            }}>
+              <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>😕</div>
+              <h1 style={{ color: '#2A211C', marginBottom: '0.5rem' }}>Page Not Found</h1>
+              <p style={{ color: '#8B7E74', marginBottom: '1.5rem' }}>
+                The page you're looking for doesn't exist.
+              </p>
+              <a href="/admin" style={{
+                padding: '0.75rem 1.5rem',
+                backgroundColor: '#6F4E37',
+                color: 'white',
+                textDecoration: 'none',
+                borderRadius: '8px',
+                fontWeight: '600'
+              }}>
+                Go to Dashboard
+              </a>
+            </div>
+          } />
         </Routes>
       </Router>
     </AuthProvider>

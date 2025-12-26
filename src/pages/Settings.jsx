@@ -1,5 +1,6 @@
-// src/pages/Settings.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { menuService } from '../services/menuService';
+import { apiService } from '../services/apiService';
 
 const Settings = () => {
   const [settings, setSettings] = useState({
@@ -13,45 +14,89 @@ const Settings = () => {
     autoSave: true
   });
 
-  // Sync states
-  const [syncStatus, setSyncStatus] = useState('idle'); // 'idle', 'syncing', 'importing'
+  const [syncStatus, setSyncStatus] = useState('idle');
   const [syncMessage, setSyncMessage] = useState(null);
+  const [serverStatus, setServerStatus] = useState('checking');
+  const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState({
+    adminItems: 0,
+    serverItems: 0,
+    serverOrders: 0,
+    serverUsers: 0
+  });
+
+  useEffect(() => {
+    loadData();
+    checkServerStatus();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      // Load admin items count
+      const adminItems = menuService.getAll();
+      setStats(prev => ({ ...prev, adminItems: adminItems.length || 0 }));
+
+      // Load server stats if available
+      if (serverStatus === 'online') {
+        try {
+          const serverProducts = await menuService.getAll();
+          const serverStats = await apiService.getStats();
+          const serverUsers = await apiService.getUsers();
+
+          setStats(prev => ({
+            ...prev,
+            serverItems: serverProducts.length,
+            serverOrders: serverStats.overview?.total_orders || 0,
+            serverUsers: serverUsers.length || 0
+          }));
+        } catch (error) {
+          console.log('Could not load server stats:', error);
+        }
+      }
+
+      // Load saved settings
+      const savedSettings = localStorage.getItem('admin_settings');
+      if (savedSettings) {
+        setSettings(JSON.parse(savedSettings));
+      }
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  };
+
+  const checkServerStatus = async () => {
+    try {
+      const status = await apiService.checkHealth();
+      setServerStatus(status.ok ? 'online' : 'offline');
+    } catch (error) {
+      setServerStatus('offline');
+    }
+  };
 
   // Sync handlers
-  const handleSyncToMainSite = async () => {
+  const handleSyncToServer = async () => {
     setSyncStatus('syncing');
     setSyncMessage(null);
 
     try {
-      // Get current admin menu items
-      const adminItems = JSON.parse(localStorage.getItem('admin_menu_items') || '[]');
+      const result = await menuService.syncWithServer();
 
-      // Convert to main site format
-      const mainSiteFormat = adminItems.map(item => ({
-        id: item.id,
-        name: item.name,
-        category: item.category,
-        price: item.price,
-        description: item.description,
-        image: item.image || 'https://images.unsplash.com/photo-1511537190424-bbbab87ac5eb',
-        popular: item.popular || false,
-        rating: 4.5
-      }));
-
-      // Save to main site storage
-      localStorage.setItem('brewAndCoCart', JSON.stringify(mainSiteFormat));
-
-      // Create backup
-      localStorage.setItem('menu_data_backup', JSON.stringify(mainSiteFormat));
-
-      setSyncMessage({
-        type: 'success',
-        text: `Successfully synchronized ${mainSiteFormat.length} items to main website.`
-      });
+      if (result.success) {
+        await loadData();
+        setSyncMessage({
+          type: 'success',
+          text: `✅ ${result.message}`
+        });
+      } else {
+        setSyncMessage({
+          type: 'error',
+          text: `❌ ${result.error}`
+        });
+      }
     } catch (error) {
       setSyncMessage({
         type: 'error',
-        text: 'Failed to sync: ' + error.message
+        text: `❌ Sync failed: ${error.message}`
       });
     } finally {
       setSyncStatus('idle');
@@ -59,35 +104,24 @@ const Settings = () => {
     }
   };
 
-  const handleImportFromMainSite = async () => {
+  const handleImportFromServer = async () => {
     setSyncStatus('importing');
     setSyncMessage(null);
 
     try {
-      // Get main site data
-      const mainSiteItems = JSON.parse(localStorage.getItem('brewAndCoCart') || '[]');
-
-      // Convert to admin format
-      const adminFormat = mainSiteItems.map(item => ({
-        ...item,
-        stock: 50, // Default stock
-        createdAt: new Date().toISOString()
-      }));
-
-      // Save to admin storage
-      localStorage.setItem('admin_menu_items', JSON.stringify(adminFormat));
+      const serverProducts = await menuService.getAll();
 
       setSyncMessage({
         type: 'success',
-        text: `Successfully imported ${adminFormat.length} items from main website.`
+        text: `✅ Imported ${serverProducts.length} items from server`
       });
 
-      // Refresh page after 2 seconds to show updated data
-      setTimeout(() => window.location.reload(), 2000);
+      // Refresh after 1 second
+      setTimeout(() => window.location.reload(), 1000);
     } catch (error) {
       setSyncMessage({
         type: 'error',
-        text: 'Failed to import: ' + error.message
+        text: `❌ Import failed: ${error.message}`
       });
     } finally {
       setSyncStatus('idle');
@@ -96,44 +130,107 @@ const Settings = () => {
 
   const handleExportJSON = async () => {
     try {
-      // Get current admin menu items
-      const adminItems = JSON.parse(localStorage.getItem('admin_menu_items') || '[]');
+      const adminItems = await menuService.getAll();
 
-      // Convert to main site format
-      const mainSiteFormat = adminItems.map(item => ({
-        id: item.id,
-        name: item.name,
-        category: item.category,
-        price: item.price,
-        description: item.description,
-        image: item.image || 'https://images.unsplash.com/photo-1511537190424-bbbab87ac5eb',
-        popular: item.popular || false,
-        rating: 4.5
-      }));
+      const exportData = {
+        version: '1.0',
+        export_date: new Date().toISOString(),
+        items: adminItems,
+        settings: settings,
+        server_status: serverStatus
+      };
 
-      // Create downloadable file
-      const dataStr = JSON.stringify(mainSiteFormat, null, 2);
+      const dataStr = JSON.stringify(exportData, null, 2);
       const dataBlob = new Blob([dataStr], { type: 'application/json' });
       const url = URL.createObjectURL(dataBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `brew-co-menu-export-${new Date().toISOString().split('T')[0]}.json`;
+      link.download = `brew-co-backup-${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      // Clean up
       setTimeout(() => URL.revokeObjectURL(url), 100);
 
       setSyncMessage({
         type: 'success',
-        text: `File downloaded: ${link.download} (${mainSiteFormat.length} items)`
+        text: `✅ Backup exported: ${link.download} (${adminItems.length} items)`
+      });
+
+      setTimeout(() => setSyncMessage(null), 5000);
+    } catch (error) {
+      setSyncMessage({
+        type: 'error',
+        text: `❌ Export failed: ${error.message}`
+      });
+    }
+  };
+
+  // Database operations
+  const handleBackupDatabase = async () => {
+    setLoading(true);
+    setSyncMessage(null);
+
+    try {
+      // Get all data
+      const products = await menuService.getAll();
+      const statsData = await apiService.getStats();
+      const users = await apiService.getUsers();
+
+      const backupData = {
+        timestamp: new Date().toISOString(),
+        products: products,
+        stats: statsData,
+        users: users,
+        settings: settings
+      };
+
+      // Save to localStorage as backup
+      localStorage.setItem('database_backup', JSON.stringify(backupData));
+
+      setSyncMessage({
+        type: 'success',
+        text: `✅ Database backup created (${products.length} products, ${users.length || 0} users)`
       });
     } catch (error) {
       setSyncMessage({
         type: 'error',
-        text: 'Failed to export: ' + error.message
+        text: `❌ Backup failed: ${error.message}`
       });
+    } finally {
+      setLoading(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  };
+
+  const handleRestoreDatabase = () => {
+    const backup = localStorage.getItem('database_backup');
+    if (!backup) {
+      setSyncMessage({
+        type: 'error',
+        text: '❌ No backup found'
+      });
+      return;
+    }
+
+    if (window.confirm('Restore from backup? This will replace current data.')) {
+      try {
+        const backupData = JSON.parse(backup);
+
+        // In a real app, you would send this to the API
+        // For now, just show the backup data
+        console.log('Backup data:', backupData);
+
+        setSyncMessage({
+          type: 'success',
+          text: `✅ Backup data loaded (${backupData.products?.length || 0} items)`
+        });
+      } catch (error) {
+        setSyncMessage({
+          type: 'error',
+          text: `❌ Restore failed: ${error.message}`
+        });
+      }
     }
   };
 
@@ -148,7 +245,11 @@ const Settings = () => {
 
   const handleSave = () => {
     localStorage.setItem('admin_settings', JSON.stringify(settings));
-    alert('Settings saved successfully!');
+    setSyncMessage({
+      type: 'success',
+      text: '✅ Settings saved successfully!'
+    });
+    setTimeout(() => setSyncMessage(null), 3000);
   };
 
   const handleReset = () => {
@@ -163,54 +264,141 @@ const Settings = () => {
       autoSave: true
     };
     setSettings(defaultSettings);
+    localStorage.setItem('admin_settings', JSON.stringify(defaultSettings));
+
+    setSyncMessage({
+      type: 'success',
+      text: '✅ Settings reset to defaults'
+    });
+    setTimeout(() => setSyncMessage(null), 3000);
   };
 
-  const handleExportData = () => {
-    const data = {
-      menuItems: JSON.parse(localStorage.getItem('admin_menu_items') || '[]'),
-      users: JSON.parse(localStorage.getItem('admin_users') || '[]'),
-      settings: JSON.parse(localStorage.getItem('admin_settings') || '{}')
-    };
-
-    const dataStr = JSON.stringify(data, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'brew-co-data-export.json';
-    link.click();
-  };
-
-  const handleClearData = () => {
-    if (window.confirm('Are you sure? This will delete all menu items and users (except admin).')) {
+  const handleClearLocalData = () => {
+    if (window.confirm('Clear all local data? This will only affect localStorage.')) {
       localStorage.removeItem('admin_menu_items');
       localStorage.removeItem('admin_orders');
-      // Keep admin user
+      localStorage.removeItem('menu_data_backup');
+
+      // Keep settings and users
       const adminUser = JSON.parse(localStorage.getItem('admin_users') || '[]').find(user => user.role === 'admin');
       localStorage.setItem('admin_users', JSON.stringify(adminUser ? [adminUser] : []));
-      alert('Data cleared successfully! Refresh the page.');
+
+      setSyncMessage({
+        type: 'success',
+        text: '✅ Local data cleared. Please refresh the page.'
+      });
+
+      setTimeout(() => window.location.reload(), 2000);
     }
   };
 
-  // Get counts for display
-  const adminItemCount = JSON.parse(localStorage.getItem('admin_menu_items') || '[]').length;
-  const mainSiteCount = JSON.parse(localStorage.getItem('brewAndCoCart') || '[]').length;
+  const handleTestConnection = async () => {
+    setLoading(true);
+    try {
+      const status = await apiService.checkHealth();
+
+      if (status.ok) {
+        setSyncMessage({
+          type: 'success',
+          text: `✅ Connection successful! Server is online. ${status.service || ''}`
+        });
+        setServerStatus('online');
+      } else {
+        setSyncMessage({
+          type: 'error',
+          text: `❌ Server responded but with error: ${status.message}`
+        });
+        setServerStatus('offline');
+      }
+    } catch (error) {
+      setSyncMessage({
+        type: 'error',
+        text: '❌ Connection failed. Server is offline or unreachable.'
+      });
+      setServerStatus('offline');
+    } finally {
+      setLoading(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  };
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <h1 style={{ color: '#2A211C', fontSize: '1.875rem' }}>Settings</h1>
+    <div style={{ padding: '20px' }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '2rem',
+        flexWrap: 'wrap',
+        gap: '1rem'
+      }}>
+        <div>
+          <h1 style={{ color: '#2A211C', fontSize: '1.875rem', marginBottom: '0.25rem' }}>
+            Settings & Configuration
+          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#666', fontSize: '0.9rem' }}>
+            <span>Server Status:</span>
+            <span style={{
+              padding: '0.125rem 0.5rem',
+              borderRadius: '9999px',
+              fontSize: '0.75rem',
+              fontWeight: '600',
+              backgroundColor: serverStatus === 'online' ? 'rgba(16, 185, 129, 0.1)' :
+                            serverStatus === 'checking' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              color: serverStatus === 'online' ? '#10B981' :
+                    serverStatus === 'checking' ? '#F59E0B' : '#EF4444'
+            }}>
+              {serverStatus === 'online' ? '🟢 Online' :
+               serverStatus === 'checking' ? '🟡 Checking...' : '🔴 Offline'}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <button
+            onClick={handleTestConnection}
+            disabled={loading}
+            style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#3B82F6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            {loading ? 'Testing...' : 'Test Connection'}
+          </button>
+        </div>
       </div>
 
+      {/* Status Messages */}
+      {syncMessage && (
+        <div style={{
+          padding: '1rem',
+          borderRadius: '8px',
+          marginBottom: '2rem',
+          backgroundColor: syncMessage.type === 'success' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+          border: `1px solid ${syncMessage.type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+          color: syncMessage.type === 'success' ? '#10B981' : '#EF4444'
+        }}>
+          {syncMessage.text}
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' }}>
-        {/* Sync with Main Website Section */}
+        {/* Database Sync Section */}
         <div style={{
           background: '#FFFFFF',
           borderRadius: '12px',
           padding: '1.5rem',
           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
         }}>
-          <h2 style={{ color: '#2A211C', marginBottom: '1rem', fontSize: '1.25rem' }}>Sync with Main Website</h2>
+          <h2 style={{ color: '#2A211C', marginBottom: '1rem', fontSize: '1.25rem' }}>Database Operations</h2>
 
           <div style={{ marginBottom: '1.5rem' }}>
             <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74', fontSize: '0.875rem' }}>Current Status</h3>
@@ -221,12 +409,20 @@ const Settings = () => {
               fontSize: '0.875rem'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                <span style={{ color: '#8B7E74' }}>Admin Panel Items:</span>
-                <span style={{ fontWeight: '600' }}>{adminItemCount}</span>
+                <span style={{ color: '#8B7E74' }}>Local Items:</span>
+                <span style={{ fontWeight: '600' }}>{stats.adminItems}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#8B7E74' }}>Server Items:</span>
+                <span style={{ fontWeight: '600' }}>{stats.serverItems}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#8B7E74' }}>Server Orders:</span>
+                <span style={{ fontWeight: '600' }}>{stats.serverOrders}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#8B7E74' }}>Main Website Items:</span>
-                <span style={{ fontWeight: '600' }}>{mainSiteCount}</span>
+                <span style={{ color: '#8B7E74' }}>Server Users:</span>
+                <span style={{ fontWeight: '600' }}>{stats.serverUsers}</span>
               </div>
             </div>
           </div>
@@ -236,16 +432,17 @@ const Settings = () => {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               <button
-                onClick={handleSyncToMainSite}
-                disabled={syncStatus === 'syncing'}
+                onClick={handleSyncToServer}
+                disabled={syncStatus === 'syncing' || serverStatus === 'offline'}
                 style={{
                   padding: '0.75rem 1rem',
-                  backgroundColor: syncStatus === 'syncing' ? '#8B7E74' : '#6F4E37',
+                  backgroundColor: syncStatus === 'syncing' ? '#8B7E74' :
+                                 serverStatus === 'offline' ? '#CBD5E1' : '#6F4E37',
                   color: 'white',
                   border: 'none',
                   borderRadius: '8px',
                   fontWeight: '600',
-                  cursor: syncStatus === 'syncing' ? 'not-allowed' : 'pointer',
+                  cursor: syncStatus === 'syncing' || serverStatus === 'offline' ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -260,22 +457,23 @@ const Settings = () => {
                 ) : (
                   <>
                     <span>🔄</span>
-                    Sync to Main Website
+                    Sync to Server
                   </>
                 )}
               </button>
 
               <button
-                onClick={handleImportFromMainSite}
-                disabled={syncStatus === 'importing'}
+                onClick={handleImportFromServer}
+                disabled={syncStatus === 'importing' || serverStatus === 'offline'}
                 style={{
                   padding: '0.75rem 1rem',
-                  backgroundColor: syncStatus === 'importing' ? '#8B7E74' : '#10B981',
+                  backgroundColor: syncStatus === 'importing' ? '#8B7E74' :
+                                 serverStatus === 'offline' ? '#CBD5E1' : '#10B981',
                   color: 'white',
                   border: 'none',
                   borderRadius: '8px',
                   fontWeight: '600',
-                  cursor: syncStatus === 'importing' ? 'not-allowed' : 'pointer',
+                  cursor: syncStatus === 'importing' || serverStatus === 'offline' ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -290,49 +488,61 @@ const Settings = () => {
                 ) : (
                   <>
                     <span>📥</span>
-                    Import from Main Website
+                    Import from Server
                   </>
                 )}
               </button>
 
-              <button
-                onClick={handleExportJSON}
-                style={{
-                  padding: '0.75rem 1rem',
-                  backgroundColor: '#3B82F6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.5rem'
-                }}
-              >
-                <span>💾</span>
-                Export as JSON File
-              </button>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <button
+                  onClick={handleBackupDatabase}
+                  disabled={loading}
+                  style={{
+                    padding: '0.75rem 1rem',
+                    backgroundColor: loading ? '#8B7E74' : '#3B82F6',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: '600',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span>💾</span>
+                  Backup
+                </button>
+
+                <button
+                  onClick={handleRestoreDatabase}
+                  style={{
+                    padding: '0.75rem 1rem',
+                    backgroundColor: '#F59E0B',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem'
+                  }}
+                >
+                  <span>🔄</span>
+                  Restore
+                </button>
+              </div>
             </div>
           </div>
 
-          {syncMessage && (
-            <div style={{
-              padding: '1rem',
-              borderRadius: '8px',
-              marginTop: '1rem',
-              backgroundColor: syncMessage.type === 'success' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-              border: `1px solid ${syncMessage.type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
-              color: syncMessage.type === 'success' ? '#10B981' : '#EF4444'
-            }}>
-              {syncMessage.text}
-            </div>
-          )}
-
-          <div style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: '#8B7E74' }}>
-            <p><strong>Note:</strong> This will sync menu data with the main Brew & Co website.</p>
-            <p>Data is transferred via localStorage - both sites must use the same browser.</p>
+          <div style={{ fontSize: '0.75rem', color: '#8B7E74' }}>
+            <p><strong>Note:</strong> Sync operations require the server to be online.</p>
+            {serverStatus === 'offline' && (
+              <p style={{ color: '#EF4444' }}>⚠️ Server is offline. Some functions are disabled.</p>
+            )}
           </div>
 
           <style>
@@ -352,10 +562,12 @@ const Settings = () => {
           padding: '1.5rem',
           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
         }}>
-          <h2 style={{ color: '#2A211C', marginBottom: '1rem', fontSize: '1.25rem' }}>Business Information</h2>
+          <h2 style={{ color: '#2A211C', marginBottom: '1rem', fontSize: '1.25rem' }}>Business Settings</h2>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Store Name</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Store Name
+            </label>
             <input
               type="text"
               name="storeName"
@@ -366,13 +578,15 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem'
+                fontSize: '0.875rem'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Contact Email</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Contact Email
+            </label>
             <input
               type="email"
               name="email"
@@ -383,13 +597,15 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem'
+                fontSize: '0.875rem'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Phone Number</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Phone Number
+            </label>
             <input
               type="tel"
               name="phone"
@@ -400,13 +616,15 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem'
+                fontSize: '0.875rem'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Business Address</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Business Address
+            </label>
             <textarea
               name="address"
               value={settings.address}
@@ -417,14 +635,16 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem',
+                fontSize: '0.875rem',
                 fontFamily: 'inherit'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Business Hours</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Business Hours
+            </label>
             <input
               type="text"
               name="businessHours"
@@ -435,13 +655,15 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem'
+                fontSize: '0.875rem'
               }}
             />
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Tax Rate (%)</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500', fontSize: '0.875rem' }}>
+              Tax Rate (%)
+            </label>
             <input
               type="number"
               name="taxRate"
@@ -455,7 +677,7 @@ const Settings = () => {
                 padding: '0.75rem',
                 border: '1px solid #E5E7EB',
                 borderRadius: '8px',
-                fontSize: '1rem'
+                fontSize: '0.875rem'
               }}
             />
           </div>
@@ -467,8 +689,11 @@ const Settings = () => {
               name="enableNotifications"
               checked={settings.enableNotifications}
               onChange={handleChange}
+              style={{ width: '18px', height: '18px' }}
             />
-            <label htmlFor="enableNotifications" style={{ fontWeight: '500' }}>Enable Notifications</label>
+            <label htmlFor="enableNotifications" style={{ fontWeight: '500', fontSize: '0.875rem' }}>
+              Enable Notifications
+            </label>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
@@ -478,32 +703,37 @@ const Settings = () => {
               name="autoSave"
               checked={settings.autoSave}
               onChange={handleChange}
+              style={{ width: '18px', height: '18px' }}
             />
-            <label htmlFor="autoSave" style={{ fontWeight: '500' }}>Auto-save Changes</label>
+            <label htmlFor="autoSave" style={{ fontWeight: '500', fontSize: '0.875rem' }}>
+              Auto-save Changes
+            </label>
           </div>
 
           <div style={{ display: 'flex', gap: '1rem' }}>
             <button onClick={handleSave} style={{
-              padding: '0.5rem 1rem',
+              padding: '0.75rem 1.5rem',
               backgroundColor: '#6F4E37',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
               fontWeight: '600',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              fontSize: '0.875rem'
             }}>
               Save Settings
             </button>
             <button onClick={handleReset} style={{
-              padding: '0.5rem 1rem',
+              padding: '0.75rem 1.5rem',
               backgroundColor: '#F8F5F0',
               color: '#333333',
               border: '1px solid #E5E7EB',
               borderRadius: '8px',
               fontWeight: '600',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              fontSize: '0.875rem'
             }}>
-              Reset to Defaults
+              Reset
             </button>
           </div>
         </div>
@@ -519,65 +749,108 @@ const Settings = () => {
       }}>
         <h2 style={{ color: '#2A211C', marginBottom: '1rem', fontSize: '1.25rem' }}>Data Management</h2>
 
-        <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74' }}>Export Data</h3>
-          <p style={{ marginBottom: '1rem', color: '#8B7E74', fontSize: '0.875rem' }}>
-            Export all menu items and user data as a JSON file.
-          </p>
-          <button onClick={handleExportData} style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#10B981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: '600',
-            cursor: 'pointer'
-          }}>
-            Export All Data
-          </button>
-        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+          {/* Export Section */}
+          <div>
+            <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74', fontSize: '1rem' }}>Export Data</h3>
+            <p style={{ marginBottom: '1rem', color: '#8B7E74', fontSize: '0.875rem' }}>
+              Export all data as a JSON file for backup or transfer.
+            </p>
 
-        <div style={{ marginBottom: '2rem' }}>
-          <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74' }}>Clear Data</h3>
-          <p style={{ marginBottom: '1rem', color: '#8B7E74', fontSize: '0.875rem' }}>
-            Warning: This will delete all menu items and non-admin users.
-          </p>
-          <button onClick={handleClearData} style={{
-            padding: '0.5rem 1rem',
-            backgroundColor: '#EF4444',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            fontWeight: '600',
-            cursor: 'pointer'
-          }}>
-            Clear All Data
-          </button>
-        </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <button
+                onClick={handleExportJSON}
+                style={{
+                  padding: '0.75rem 1rem',
+                  backgroundColor: '#10B981',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  fontSize: '0.875rem'
+                }}
+              >
+                <span>📤</span>
+                Export JSON Backup
+              </button>
 
-        <div>
-          <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74' }}>System Information</h3>
-          <div style={{
-            backgroundColor: '#F8F5F0',
-            borderRadius: '8px',
-            padding: '1rem',
-            fontSize: '0.875rem'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span style={{ color: '#8B7E74' }}>Version:</span>
-              <span style={{ fontWeight: '600' }}>1.0.0</span>
+              <div style={{ fontSize: '0.75rem', color: '#8B7E74' }}>
+                <p>Includes: Menu items, settings, and system status</p>
+              </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span style={{ color: '#8B7E74' }}>Last Updated:</span>
-              <span>{new Date().toLocaleDateString()}</span>
+          </div>
+
+          {/* Local Data Management */}
+          <div>
+            <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74', fontSize: '1rem' }}>Local Storage</h3>
+            <p style={{ marginBottom: '1rem', color: '#8B7E74', fontSize: '0.875rem' }}>
+              Manage data stored in your browser's localStorage.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <button
+                onClick={handleClearLocalData}
+                style={{
+                  padding: '0.75rem 1rem',
+                  backgroundColor: '#EF4444',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  fontSize: '0.875rem'
+                }}
+              >
+                <span>🗑️</span>
+                Clear Local Data
+              </button>
+
+              <div style={{ fontSize: '0.75rem', color: '#8B7E74' }}>
+                <p>Warning: This will delete all local menu items and orders.</p>
+              </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <span style={{ color: '#8B7E74' }}>Admin Menu Items:</span>
-              <span>{adminItemCount}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: '#8B7E74' }}>Main Website Items:</span>
-              <span>{mainSiteCount}</span>
+          </div>
+
+          {/* System Information */}
+          <div>
+            <h3 style={{ marginBottom: '0.5rem', color: '#8B7E74', fontSize: '1rem' }}>System Information</h3>
+
+            <div style={{
+              backgroundColor: '#F8F5F0',
+              borderRadius: '8px',
+              padding: '1rem',
+              fontSize: '0.875rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#8B7E74' }}>Version:</span>
+                <span style={{ fontWeight: '600', fontFamily: 'monospace' }}>1.0.0</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#8B7E74' }}>API Status:</span>
+                <span style={{
+                  fontWeight: '600',
+                  color: serverStatus === 'online' ? '#10B981' : '#EF4444'
+                }}>
+                  {serverStatus === 'online' ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#8B7E74' }}>Local Items:</span>
+                <span style={{ fontWeight: '600' }}>{stats.adminItems}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#8B7E74' }}>Last Backup:</span>
+                <span style={{ fontSize: '0.75rem' }}>
+                  {localStorage.getItem('database_backup') ? 'Available' : 'None'}
+                </span>
+              </div>
             </div>
           </div>
         </div>

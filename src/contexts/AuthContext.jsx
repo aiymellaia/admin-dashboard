@@ -1,56 +1,118 @@
-// src/contexts/AuthContext.jsx
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { apiService } from '../services/apiService';
+import { storageService } from '../services/storageService';
 
-const AuthContext = createContext({});
+const AuthContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('admin_auth') === 'true';
-  });
-  const [user, setUser] = useState(null);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [admin, setAdmin] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [serverStatus, setServerStatus] = useState('checking');
 
-  const login = (username, password) => {
-    // Predefined admin credentials
-    const adminUsername = 'admin';
-    const adminPassword = 'admin123';
+    useEffect(() => {
+        checkAuth();
+        checkServerStatus();
+    }, []);
 
-    if (username === adminUsername && password === adminPassword) {
-      const userData = {
-        id: 1,
-        username: adminUsername,
-        role: 'admin',
-        name: 'Administrator'
-      };
+    const checkServerStatus = async () => {
+        try {
+            const status = await apiService.checkHealth();
+            setServerStatus(status.ok ? 'online' : 'offline');
+            return status.ok;
+        } catch (error) {
+            setServerStatus('offline');
+            return false;
+        }
+    };
 
-      setIsAuthenticated(true);
-      setUser(userData);
-      localStorage.setItem('admin_auth', 'true');
-      localStorage.setItem('admin_user', JSON.stringify(userData));
-      return { success: true, user: userData };
-    }
+    const checkAuth = async () => {
+        try {
+            const session = storageService.getSession();
+            const token = localStorage.getItem('admin_token');
 
-    return { success: false, message: 'Invalid credentials' };
-  };
+            if (session && token) {
+                // Проверяем статус аутентификации
+                const authStatus = await apiService.checkAuthStatus();
 
-  const logout = () => {
-    setIsAuthenticated(false);
-    setUser(null);
-    localStorage.removeItem('admin_auth');
-    localStorage.removeItem('admin_user');
-  };
+                if (authStatus.authenticated) {
+                    setAdmin(session);
+                    setIsAuthenticated(true);
+                } else {
+                    // Токен невалидный, очищаем
+                    logout();
+                }
+            }
+        } catch (error) {
+            console.error('Auth check error:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  useEffect(() => {
-    const storedUser = localStorage.getItem('admin_user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-  }, []);
+    const login = async (username, password) => {
+        try {
+            console.log('🔐 Attempting login with:', { username });
 
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, user, login, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+            const result = await apiService.adminLogin(username, password);
+
+            if (result.success && result.token && result.admin) {
+                // Сохраняем токен
+                apiService.setToken(result.token);
+
+                // Сохраняем данные администратора
+                const adminData = {
+                    id: result.admin.id,
+                    username: result.admin.username,
+                    email: result.admin.email,
+                    role: result.admin.role,
+                    name: result.admin.name || result.admin.username
+                };
+
+                storageService.saveSession(adminData);
+
+                setAdmin(adminData);
+                setIsAuthenticated(true);
+                setServerStatus('online');
+
+                return { success: true, admin: adminData };
+            } else {
+                return {
+                    success: false,
+                    error: result.error || 'Login failed'
+                };
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            return {
+                success: false,
+                error: error.message || 'Connection error'
+            };
+        }
+    };
+
+    const logout = () => {
+        apiService.clearToken();
+        storageService.clearSession();
+        setIsAuthenticated(false);
+        setAdmin(null);
+    };
+
+    const value = {
+        isAuthenticated,
+        admin,
+        loading,
+        serverStatus,
+        login,
+        logout,
+        checkServerStatus
+    };
+
+    return (
+        <AuthContext.Provider value={value}>
+            {children}
+        </AuthContext.Provider>
+    );
 };
